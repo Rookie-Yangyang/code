@@ -111,6 +111,7 @@ void read_cb(int fd, short events, void *arg)
 	char    buf[1024];
 	int     rv;
 
+	memset(buf, 0, sizeof(buf));
 	rv=SSL_read(ssl,buf,sizeof(buf));
 	if( rv<=0 )
 	{
@@ -129,7 +130,6 @@ int main(int argc, char **argv)
 	char                        *server_ip = NULL;
 	
 	SSL_CTX* ctx = NULL;  
-	SSL* ssl = NULL; 
 
 	struct option opt[]={
 		{"server_ip",required_argument,NULL,'i'},
@@ -177,6 +177,7 @@ int main(int argc, char **argv)
 	if ( ctx == NULL )
 	{
 		ERR_print_errors_fp(stdout);
+		SSL_CTX_free (ctx);
 		exit(1);
 	}
 
@@ -199,6 +200,7 @@ int main(int argc, char **argv)
 		return -1;
 	}
 
+	/*加载客户端私钥*/
 	if(SSL_CTX_use_PrivateKey_file(ctx, CLIENT_KEY_FILE, SSL_FILETYPE_PEM) <= 0)
 	{
 		printf("SSL_CTX_use_PrivateKey_file error!\n");
@@ -206,6 +208,7 @@ int main(int argc, char **argv)
 		return -1;
 	}
 
+	/*检查私钥是否正确*/
 	if(!SSL_CTX_check_private_key(ctx))
 	{
 		printf("SSL_CTX_check_private_key error!\n");
@@ -217,14 +220,43 @@ int main(int argc, char **argv)
 	sockfd = socket_connect(server_ip, server_port);
 	if (sockfd < 0)
 	{
-		printf("socket_connect failure!\n");
-		return -1;
+	printf("socket_connect failure!\n");
+	return -1;
 	}
 
 	printf("创建ssl套接字\n");
+	
+
+	/*int           connfd;
+
+	struct sockaddr_in    servaddr;
+
+	sockfd=socket(AF_INET,SOCK_STREAM,0);
+	if( sockfd<0 )
+	{
+		printf("Create socket failure:%s\n",strerror(errno));
+		return -1;
+	}
+	printf("Create socket successfully!\n");
+
+	memset(&servaddr,0,sizeof(servaddr));
+	servaddr.sin_family=AF_INET;
+	servaddr.sin_port=htons(server_port);
+	inet_aton(server_ip,&servaddr.sin_addr);
+	connfd=connect(sockfd,(struct sockaddr *)&servaddr,sizeof(servaddr));
+	if( connfd<0 )
+	{
+		printf("Connect to server failure:%s\n",strerror(errno));
+		return -2;
+	}
+	printf("Connect to server successfully!\n");
+	
+	*设置为非阻塞*
+	evutil_make_socket_nonblocking(sockfd);*/
+
 
 	/*创建SSL套接字*/
-	ssl = SSL_new(ctx);
+	SSL *ssl = SSL_new(ctx);
 	printf("address:%p\n",ssl);
 	if (ssl == NULL)
 	{
@@ -237,7 +269,7 @@ int main(int argc, char **argv)
 
 	if (SSL_connect(ssl) == -1)
 	{
-		printf("SSL_new error!\n");
+		printf("SSL_connect filure:%s!\n", strerror(errno));
 		ERR_print_errors_fp(stderr);
 		return -1;
 	}

@@ -48,12 +48,14 @@ int socket_init(char *server_ip,int server_port)
 	printf("Create socket successfully!\n");
 
 	/*允许多次绑定同一个地址。要用在socket和bind之间*/
-	evutil_make_listen_socket_reuseable(sockfd);
+	/*evutil_make_listen_socket_reuseable(sockfd);*/
 
 	memset(&servaddr,0,sizeof(servaddr));
 	servaddr.sin_family=AF_INET;
 	servaddr.sin_port=htons(server_port);
 	servaddr.sin_addr.s_addr=htonl(INADDR_ANY);
+
+	evutil_make_socket_nonblocking(sockfd);
 
 	if( (bind(sockfd,(struct sockaddr*)&servaddr,sizeof(servaddr)))<0 )
 	{
@@ -64,12 +66,12 @@ int socket_init(char *server_ip,int server_port)
 	listen(sockfd,64);
 
 	/*跨平台统一接口，将套接字设置为非阻塞状态*/
-	evutil_make_socket_nonblocking(sockfd);
+	/*evutil_make_socket_nonblocking(sockfd);*/
 	return sockfd;
 }
 
 /*回调函数read_cb*/
-void read_cb(int fd, short events, void* arg)
+void read_cb(int clifd, short events, void* arg)
 {
 	SSL* ssl = (SSL*)arg;
 
@@ -90,59 +92,66 @@ void read_cb(int fd, short events, void* arg)
 }
 
 SSL* CreateSSL(int clifd)
-{
-	SSL_CTX* ctx = NULL;  
-	SSL* ssl = NULL; 
-	ctx = SSL_CTX_new (SSLv23_server_method());
+{   
+	SSL_CTX* ctx = SSL_CTX_new (SSLv23_server_method());
 	if( ctx == NULL)
 	{
 		printf("SSL_CTX_new error!\n");
 		return NULL;
 	}
 
-	// 要求校验对方证书  
+	/* 要求校验对方证书  */
 	SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);  
 
-	// 加载CA的证书  
+	/* 加载CA的证书  */
 	if(!SSL_CTX_load_verify_locations(ctx, CA_CERT_FILE, NULL))
 	{
 		printf("SSL_CTX_load_verify_locations error!\n");
 		return NULL;
 	}
 
-	// 加载自己的证书  
+	/* 加载自己的证书  */
 	if(SSL_CTX_use_certificate_file(ctx, SERVER_CERT_FILE, SSL_FILETYPE_PEM) <= 0)
 	{
 		printf("SSL_CTX_use_certificate_file error!\n");
 		return NULL;
 	}
 
-	// 加载自己的私钥  
+	/* 加载自己的私钥  */
 	if(SSL_CTX_use_PrivateKey_file(ctx, SERVER_KEY_FILE, SSL_FILETYPE_PEM) <= 0)
 	{
 		printf("SSL_CTX_use_PrivateKey_file error!\n");
 		return NULL;
 	}
 
+	/*检查私钥是否正确*/
 	if(!SSL_CTX_check_private_key(ctx))
 	{
 		printf("SSL_CTX_check_private_key error!\n");
 		return NULL;
 	}
 
-	ssl = SSL_new (ctx);
+	/*申请ssl套接字*/
+	SSL *ssl = SSL_new (ctx);
 	if(!ssl)
 	{
 		printf("SSL_new error!\n");
 		return NULL;
 	}
 
-	SSL_set_fd (ssl, clifd);  
-	if(SSL_accept (ssl) != 1)
+	if ( (SSL_set_fd (ssl, clifd)) != 1 )
+	{
+		printf("SSL_set_fd error!\n");
+		return 0;
+	}
+
+	
+	if( (SSL_accept (ssl)) != 1)
 	{
 		int icode = -1;
 		int iret = SSL_get_error(ssl, icode);
-		printf("SSL_accept error! code = %d, iret = %d\n", icode, iret);
+		ERR_print_errors_fp(stderr);
+		printf("SSL_accept error:%s! code = %d, iret = %d\n", strerror(errno), icode, iret);
 		return NULL;
 	}
 
@@ -168,7 +177,6 @@ void do_accept(int listenfd, short event, void *arg)
 	}
 	else
 	{
-		evutil_make_socket_nonblocking(clifd);
 		printf("Accept new client[%d] successfully!\n",clifd);
 
 		SSL* ssl = CreateSSL(clifd);
@@ -184,23 +192,6 @@ void do_accept(int listenfd, short event, void *arg)
 	}
 }
 
-void write_cb(struct bufferevent* bev,void* arg)
-{
-
-}
-
-/*回调函数event_cb*/
-void event_cb(struct bufferevent *bev, short event, void *arg)
-{
-	if (event & BEV_EVENT_EOF)
-		printf("connection closed\n");
-	else if (event & BEV_EVENT_ERROR)
-		printf("some other error\n");
-
-	/*这将自动close套接字和free读写缓冲区*/
-	bufferevent_free(bev);
-}
-
 
 int main(int argc,char **argv)
 {
@@ -208,8 +199,6 @@ int main(int argc,char **argv)
 	int                       port = 0;
 	int                       listenfd = -1;
 
-	struct event_base         *base;
-	struct event              *listener_event;
 
 	struct option opt[]={
 		{"port",required_argument,NULL,'p'},
@@ -244,12 +233,6 @@ int main(int argc,char **argv)
 	SSL_load_error_strings();
 	OpenSSL_add_all_algorithms();
 
-	/*创建一个event_base*/
-	base = event_base_new();
-	if (!base)
-	{
-		return 0;
-	}
 
 	/*socket初始化*/
 	listenfd=socket_init(NULL,port);
@@ -261,7 +244,13 @@ int main(int argc,char **argv)
 	}
 	printf("socket_init successfully!\n");
 
-	listener_event = event_new(base, listenfd, EV_READ|EV_PERSIST, do_accept, (void*)base);
+	struct event_base *base = event_base_new();
+	if (!base)
+	{
+		return -1;
+	}
+
+	struct event *listener_event = event_new(base, listenfd, EV_READ|EV_PERSIST, do_accept, (void*)base);
 	event_add(listener_event, NULL);
 	/*启动事件循环*/
 	event_base_dispatch(base);
